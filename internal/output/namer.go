@@ -2,58 +2,68 @@ package output
 
 import (
 	"fmt"
-	"time"
+	"strings"
+	"sync"
 )
 
-// Granularity controls how timestamps are truncated for segment naming.
-type Granularity int
-
-const (
-	ByMinute Granularity = iota
-	ByHour
-	ByDay
-)
-
-// Namer generates segment keys from timestamps or patterns.
+// Namer generates output filenames based on a pattern and a time/segment key.
 type Namer struct {
-	Granularity Granularity
+	pattern string
+	ext     string
+	mu      sync.Mutex
+	counts  map[string]int
 }
 
-// NewNamer returns a Namer with the given granularity.
-func NewNamer(g Granularity) *Namer {
-	return &Namer{Granularity: g}
-}
+const defaultPattern = "{time}"
 
-// KeyFromTime returns a string key for the given time based on granularity.
-func (n *Namer) KeyFromTime(t time.Time) string {
-	switch n.Granularity {
-	case ByMinute:
-		return t.UTC().Format("2006-01-02T15-04")
-	case ByHour:
-		return t.UTC().Format("2006-01-02T15")
-	case ByDay:
-		return t.UTC().Format("2006-01-02")
-	default:
-		return t.UTC().Format("2006-01-02T15-04")
+// NewNamer creates a Namer with the given filename pattern and extension.
+// If pattern is empty, defaultPattern is used.
+func NewNamer(pattern, ext string) *Namer {
+	if pattern == "" {
+		pattern = defaultPattern
+	}
+	if ext == "" {
+		ext = "log"
+	}
+	return &Namer{
+		pattern: pattern,
+		ext:     ext,
+		counts:  make(map[string]int),
 	}
 }
 
-// KeyFromPattern returns a sanitized key derived from a matched pattern label.
-func (n *Namer) KeyFromPattern(label string) string {
-	return sanitize(label)
+// Generate produces a filename for the given segment key.
+// Each call with the same key increments an internal index.
+func (n *Namer) Generate(key string) string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	n.counts[key]++
+	idx := n.counts[key]
+
+	name := n.pattern
+	name = strings.ReplaceAll(name, "{time}", sanitize(key))
+	name = strings.ReplaceAll(name, "{index}", fmt.Sprintf("%03d", idx))
+
+	// If pattern contained no placeholders, append the key directly.
+	if name == n.pattern {
+		name = sanitize(key)
+	}
+
+	return name + "." + n.ext
 }
 
 // sanitize replaces characters unsafe for filenames with underscores.
 func sanitize(s string) string {
-	out := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-			(c >= '0' && c <= '9') || c == '-' || c == '.' {
-			out[i] = c
-		} else {
-			out[i] = '_'
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '/', '\\', ':', ' ', '\t', '\n', '\r', '*', '?', '"', '<', '>', '|':
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
 		}
 	}
-	return fmt.Sprintf("%s", out)
+	return b.String()
 }
