@@ -60,3 +60,12 @@ func TestValidate_PatternMode(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+func TestValidate_ValidTimeMode(t *testing.T) {
+	cfg := Default()
+	cfg.InputFile = "app.log"
+	// Default mode is SplitByTime with a 1h window, which should be valid.
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for valid time mode config: %v", err)
+	}
+}
