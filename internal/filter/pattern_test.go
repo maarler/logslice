@@ -47,3 +47,24 @@ func TestPattern_String(t *testing.T) {
 		t.Errorf("unexpected negated String(): %s", pn.String())
 	}
 }
+
+func TestPattern_CaseInsensitive(t *testing.T) {
+	p, err := NewPattern(`(?i)error`, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cases := []struct {
+		line  string
+		want  bool
+	}{
+		{"ERROR: something failed", true},
+		{"Error: something failed", true},
+		{"error: something failed", true},
+		{"INFO: all good", false},
+	}
+	for _, tc := range cases {
+		if got := p.Match(tc.line); got != tc.want {
+			t.Errorf("Match(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}
