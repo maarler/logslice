@@ -82,3 +82,19 @@ func TestReporter_TickerFires(t *testing.T) {
 		t.Errorf("expected ticker output to contain line count, got %q", out)
 	}
 }
+
+// TestReporter_Add_ZeroValues verifies that adding zero lines and bytes
+// does not change the reporter's accumulated totals.
+func TestReporter_Add_ZeroValues(t *testing.T) {
+	var buf bytes.Buffer
+	r := New(&buf, true)
+	r.Add(10, 100)
+	r.Add(0, 0)
+
+	if got := r.Lines(); got != 10 {
+		t.Errorf("Lines() = %d, want 10", got)
+	}
+	if got := r.Bytes(); got != 100 {
+		t.Errorf("Bytes() = %d, want 100", got)
+	}
+}
