@@ -1,5 +1,3 @@
-// Package linecount provides utilities for counting lines in a reader
-// and estimating progress through a log file.
 package linecount
 
 import (
@@ -8,47 +6,52 @@ import (
 	"os"
 )
 
-// Result holds the outcome of a line-count operation.
-type Result struct {
-	Lines int64
-	Bytes int64
+// CountReader counts the number of newline-terminated lines in r.
+func CountReader(r io.Reader) (int64, error) {
+	var count int64
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := r.Read(buf)
+		for _, b := range buf[:n] {
+			if b == '\n' {
+				count++
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return count, err
+		}
+	}
+	return count, nil
 }
 
-// CountReader scans r and returns the number of newline-terminated lines
-// and total bytes read. r is consumed entirely.
-func CountReader(r io.Reader) (Result, error) {
-	var res Result
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		res.Lines++
-		res.Bytes += int64(len(scanner.Bytes())) + 1 // +1 for newline
-	}
-	if err := scanner.Err(); err != nil {
-		return res, err
-	}
-	return res, nil
-}
-
-// CountFile opens the named file, counts its lines, and closes it.
-func CountFile(path string) (Result, error) {
+// CountFile counts the number of lines in the file at path.
+func CountFile(path string) (int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return Result{}, err
+		return 0, err
 	}
 	defer f.Close()
-	return CountReader(f)
+	return CountReader(bufio.NewReader(f))
 }
 
-// Fraction returns the fraction of total lines represented by done,
-// clamped to [0.0, 1.0]. Returns 0 when total is zero.
-func Fraction(done, total int64) float64 {
-	if total <= 0 {
-		return 0
+// Fraction returns the approximate line number that represents the given
+// fraction (0.0–1.0) of total lines in the file.
+func Fraction(path string, frac float64) (int64, error) {
+	total, err := CountFile(path)
+	if err != nil {
+		return 0, err
 	}
-	f := float64(done) / float64(total)
-	if f > 1.0 {
-		return 1.0
+	if total == 0 {
+		return 0, nil
 	}
-	return f
+	if frac <= 0 {
+		return 0, nil
+	}
+	if frac >= 1 {
+		return total, nil
+	}
+	return int64(float64(total) * frac), nil
 }

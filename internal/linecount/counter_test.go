@@ -1,79 +1,79 @@
-package linecount_test
+package linecount
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/yourorg/logslice/internal/linecount"
 )
 
 func TestCountReader_Empty(t *testing.T) {
-	res, err := linecount.CountReader(strings.NewReader(""))
+	n, err := CountReader(strings.NewReader(""))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.Lines != 0 {
-		t.Errorf("expected 0 lines, got %d", res.Lines)
+	if n != 0 {
+		t.Fatalf("expected 0, got %d", n)
 	}
 }
 
 func TestCountReader_Lines(t *testing.T) {
-	input := "line one\nline two\nline three\n"
-	res, err := linecount.CountReader(strings.NewReader(input))
+	input := "line1\nline2\nline3\n"
+	n, err := CountReader(strings.NewReader(input))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.Lines != 3 {
-		t.Errorf("expected 3 lines, got %d", res.Lines)
-	}
-	if res.Bytes != int64(len(input)) {
-		t.Errorf("expected %d bytes, got %d", len(input), res.Bytes)
+	if n != 3 {
+		t.Fatalf("expected 3, got %d", n)
 	}
 }
 
 func TestCountFile(t *testing.T) {
-	f, err := os.CreateTemp(t.TempDir(), "logslice-*.log")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.log")
+	if err := os.WriteFile(path, []byte("a\nb\nc\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	n, err := CountFile(path)
 	if err != nil {
-		t.Fatalf("create temp: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	content := "alpha\nbeta\ngamma\n"
-	if _, err := f.WriteString(content); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	f.Close()
-
-	res, err := linecount.CountFile(f.Name())
-	if err != nil {
-		t.Fatalf("CountFile: %v", err)
-	}
-	if res.Lines != 3 {
-		t.Errorf("expected 3 lines, got %d", res.Lines)
+	if n != 3 {
+		t.Fatalf("expected 3, got %d", n)
 	}
 }
 
 func TestCountFile_Missing(t *testing.T) {
-	_, err := linecount.CountFile("/nonexistent/path/file.log")
+	_, err := CountFile("/no/such/file.log")
 	if err == nil {
-		t.Error("expected error for missing file, got nil")
+		t.Fatal("expected error for missing file")
 	}
 }
 
 func TestFraction(t *testing.T) {
-	cases := []struct {
-		done, total int64
-		want        float64
-	}{
-		{0, 0, 0},
-		{0, 100, 0},
-		{50, 100, 0.5},
-		{100, 100, 1.0},
-		{200, 100, 1.0}, // clamped
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.log")
+	lines := "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n"
+	if err := os.WriteFile(path, []byte(lines), 0644); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		got := linecount.Fraction(tc.done, tc.total)
+
+	tests := []struct {
+		frac float64
+		want int64
+	}{
+		{0.0, 0},
+		{1.0, 10},
+		{0.5, 5},
+		{0.1, 1},
+	}
+	for _, tc := range tests {
+		got, err := Fraction(path, tc.frac)
+		if err != nil {
+			t.Fatalf("frac=%.1f: unexpected error: %v", tc.frac, err)
+		}
 		if got != tc.want {
-			t.Errorf("Fraction(%d,%d) = %v, want %v", tc.done, tc.total, got, tc.want)
+			t.Errorf("frac=%.1f: expected %d, got %d", tc.frac, tc.want, got)
 		}
 	}
 }
