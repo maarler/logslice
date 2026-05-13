@@ -1,74 +1,114 @@
-// Package linerange provides line-number based slicing of log input.
-// It allows callers to extract a contiguous range [First, Last] of lines
-// from a stream, discarding everything outside that window.
+// Package linerange provides line-number based range filtering for log lines.
 package linerange
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
-// Range defines an inclusive line-number window (1-based).
+// Range represents an inclusive line range [Start, End].
+// A zero End means open-ended (read until EOF).
 type Range struct {
-	First int64
-	Last  int64 // 0 means "until EOF"
+	Start int64
+	End   int64 // 0 = unbounded
 }
 
-// Validate returns an error if the Range is logically invalid.
+// Validate returns an error if the range is not logically valid.
 func (r Range) Validate() error {
-	if r.First < 1 {
-		return errors.New("linerange: First must be >= 1")
+	if r.Start < 1 {
+		return fmt.Errorf("linerange: start must be >= 1, got %d", r.Start)
 	}
-	if r.Last != 0 && r.Last < r.First {
-		return fmt.Errorf("linerange: Last (%d) must be >= First (%d)", r.Last, r.First)
+	if r.End != 0 && r.End < r.Start {
+		return fmt.Errorf("linerange: end (%d) must be >= start (%d)", r.End, r.Start)
 	}
 	return nil
 }
 
-// Contains reports whether the given 1-based line number falls inside the range.
+// Contains reports whether line number n (1-based) falls within the range.
 func (r Range) Contains(n int64) bool {
-	if n < r.First {
+	if n < r.Start {
 		return false
 	}
-	if r.Last != 0 && n > r.Last {
-		return false
+	if r.End == 0 {
+		return true
 	}
-	return true
+	return n <= r.End
 }
 
-// Past reports whether n is beyond the end of the range.
-func (r Range) Past(n int64) bool {
-	return r.Last != 0 && n > r.Last
+// String returns a human-readable representation of the range.
+func (r Range) String() string {
+	if r.End == 0 {
+		return fmt.Sprintf("%d-", r.Start)
+	}
+	return fmt.Sprintf("%d-%d", r.Start, r.End)
 }
 
-// Apply reads lines from src, writing only those within the range to dst.
-// It stops reading early once the range is exhausted.
-func Apply(src io.Reader, dst io.Writer, r Range) (kept int64, err error) {
-	if err = r.Validate(); err != nil {
-		return 0, err
+// Parse parses a range string in the form "N", "N-", or "N-M".
+func Parse(s string) (Range, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return Range{}, fmt.Errorf("linerange: empty range string")
 	}
+	var r Range
+	if !strings.Contains(s, "-") {
+		var n int64
+		if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
+			return Range{}, fmt.Errorf("linerange: invalid range %q", s)
+		}
+		r = Range{Start: n, End: n}
+		return r, r.Validate()
+	}
+	parts := strings.SplitN(s, "-", 2)
+	if _, err := fmt.Sscanf(parts[0], "%d", &r.Start); err != nil {
+		return Range{}, fmt.Errorf("linerange: invalid start in %q", s)
+	}
+	if parts[1] != "" {
+		if _, err := fmt.Sscanf(parts[1], "%d", &r.End); err != nil {
+			return Range{}, fmt.Errorf("linerange: invalid end in %q", s)
+		}
+	}
+	return r, r.Validate()
+}
 
-	scanner := bufio.NewScanner(src)
+// Apply reads lines from r and writes only those within the range to w.
+// Lines are 1-indexed. It stops reading early when End is exceeded.
+func Apply(r Range, src io.Reader, dst io.Writer) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	buf := make([]byte, 0, 4096)
 	var lineNum int64
-
-	for scanner.Scan() {
-		lineNum++
-
-		if r.Past(lineNum) {
-			break
+	tmp := make([]byte, 1)
+	for {
+		n, err := src.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[0])
+			if tmp[0] == '\n' {
+				lineNum++
+				if r.Contains(lineNum) {
+					if _, werr := dst.Write(buf); werr != nil {
+						return werr
+					}
+				}
+				if r.End != 0 && lineNum >= r.End {
+					return nil
+				}
+				buf = buf[:0]
+			}
 		}
-
-		if !r.Contains(lineNum) {
-			continue
+		if err == io.EOF {
+			if len(buf) > 0 {
+				lineNum++
+				if r.Contains(lineNum) {
+					_, werr := dst.Write(buf)
+					return werr
+				}
+			}
+			return nil
 		}
-
-		if _, werr := fmt.Fprintf(dst, "%s\n", scanner.Bytes()); werr != nil {
-			return kept, werr
+		if err != nil {
+			return err
 		}
-		kept++
 	}
-
-	return kept, scanner.Err()
 }
