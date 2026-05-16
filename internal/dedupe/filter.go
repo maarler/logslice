@@ -70,3 +70,20 @@ func (f *Filter) ApplyLines(lines []string) []string {
 	}
 	return out
 }
+
+// ApplySource reads lines from a LineSource, writes non-duplicate lines to w,
+// and returns the number of lines suppressed.
+func (f *Filter) ApplySource(src LineSource, w io.Writer) (suppressed int64, err error) {
+	for {
+		line, more := src.ReadLine()
+		if !f.d.IsDuplicate(line) {
+			if _, werr := w.Write([]byte(line + "\n")); werr != nil {
+				return f.d.Suppressed(), werr
+			}
+		}
+		if !more {
+			break
+		}
+	}
+	return f.d.Suppressed(), nil
+}
