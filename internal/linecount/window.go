@@ -1,65 +1,75 @@
 package linecount
 
 import (
-	"bufio"
 	"io"
-	"time"
+	"strings"
+	"sync"
 )
 
-// WindowStats holds line count statistics for a time window.
-type WindowStats struct {
+// WindowEntry records line and byte counts for a single named window.
+type WindowEntry struct {
 	Key   string
-	Start time.Time
-	End   time.Time
 	Lines int64
 	Bytes int64
 }
 
-// WindowCounter accumulates per-window line and byte counts.
+// WindowCounter accumulates per-window statistics in insertion order.
 type WindowCounter struct {
-	windows map[string]*WindowStats
-	order   []string
+	mu      sync.Mutex
+	index   map[string]int // key -> position in windows slice
+	windows []*WindowEntry
 }
 
-// NewWindowCounter creates an empty WindowCounter.
+// NewWindowCounter returns an initialised WindowCounter.
 func NewWindowCounter() *WindowCounter {
 	return &WindowCounter{
-		windows: make(map[string]*WindowStats),
+		index: make(map[string]int),
 	}
 }
 
-// Add records a line belonging to the given window key.
-func (wc *WindowCounter) Add(key string, start, end time.Time, line string) {
-	if _, ok := wc.windows[key]; !ok {
-		wc.windows[key] = &WindowStats{Key: key, Start: start, End: end}
-		wc.order = append(wc.order, key)
+// Add records a single line of byteLen bytes under key.
+func (wc *WindowCounter) Add(key string, byteLen int64) {
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+
+	if idx, ok := wc.index[key]; ok {
+		wc.windows[idx].Lines++
+		wc.windows[idx].Bytes += byteLen
+		return
 	}
-	s := wc.windows[key]
-	s.Lines++
-	s.Bytes += int64(len(line))
+	wc.index[key] = len(wc.windows)
+	wc.windows = append(wc.windows, &WindowEntry{Key: key, Lines: 1, Bytes: byteLen})
 }
 
-// Stats returns window statistics in insertion order.
-func (wc *WindowCounter) Stats() []*WindowStats {
-	out := make([]*WindowStats, 0, len(wc.order))
-	for _, k := range wc.order {
-		out = append(out, wc.windows[k])
+// Entries returns a snapshot of all window entries in insertion order.
+func (wc *WindowCounter) Entries() []WindowEntry {
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+
+	out := make([]WindowEntry, len(wc.windows))
+	for i, w := range wc.windows {
+		out[i] = *w
 	}
 	return out
 }
 
-// CountWindowReader counts lines and bytes from r, grouping them by the key
-// returned by keyFn for each line. keyFn receives the raw line text.
-func CountWindowReader(r io.Reader, keyFn func(line string) (key string, start, end time.Time)) *WindowCounter {
+// CountWindowReader reads all lines from r, groups them by the key returned
+// by keyFn, and returns a populated WindowCounter.
+func CountWindowReader(r io.Reader, keyFn func(line string) string) (*WindowCounter, error) {
 	wc := NewWindowCounter()
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		key, start, end := keyFn(line)
+	buf, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(string(buf), "\n") {
+		if line == "" {
+			continue
+		}
+		key := keyFn(line)
 		if key == "" {
 			continue
 		}
-		wc.Add(key, start, end, line)
+		wc.Add(key, int64(len(line)+1))
 	}
-	return wc
+	return wc, nil
 }
