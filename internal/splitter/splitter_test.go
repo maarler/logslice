@@ -77,3 +77,23 @@ func TestSplit_DefaultOptions(t *testing.T) {
 		}
 	}
 }
+
+func TestSplit_FilesWrittenToOutputDir(t *testing.T) {
+	dir := t.TempDir()
+	s := splitter.New(splitter.Options{
+		WindowSize: time.Minute,
+		OutputDir:  dir,
+		Prefix:     "out",
+	})
+
+	files, err := s.Split(strings.NewReader(sampleLogs))
+	if err != nil {
+		t.Fatalf("Split() error = %v", err)
+	}
+
+	for _, f := range files {
+		if filepath.Dir(f) != dir {
+			t.Errorf("expected file %s to be in output dir %s", f, dir)
+		}
+	}
+}
